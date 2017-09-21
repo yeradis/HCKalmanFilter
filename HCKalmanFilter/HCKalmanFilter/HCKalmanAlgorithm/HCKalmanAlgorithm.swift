@@ -1,6 +1,6 @@
 //
 //  HCKalmanAlgorithm.swift
-//  HCKalmanFilter
+//  KalmanFilter
 //
 //  Created by Hypercube on 4/27/17.
 //  Copyright © 2017 Hypercube. All rights reserved.
@@ -14,7 +14,7 @@ open class HCKalmanAlgorithm
     //MARK: - HCKalmanAlgorithm properties
     
     /// The dimension M of the state vector.
-    private let stateMDimension = 4
+    private let stateMDimension = 6
     
     /// The dimension N of the state vector.
     private let stateNDimension = 1
@@ -76,7 +76,7 @@ open class HCKalmanAlgorithm
     
     /// Sensor Noise Covariance Matrix
     /// ==============================
-    /// **Sensor Noise Covariance Matrix (R)** is mathematical representation of sensor noice of Kalman Algorithm.
+    /// **Sensor Noise Covariance Matrix (R)** is mathematical representation of sensor noise of Kalman Algorithm.
     /// Sensors are unreliable, and every state in our original estimate might result in a range of sensor readings.
     private var R:HCMatrixObject
 
@@ -131,20 +131,20 @@ open class HCKalmanAlgorithm
         previousMeasureTime = initialLocation.timestamp
         
         // Set initial location
-        previousLocation = CLLocation(latitude: initialLocation.coordinate.latitude, longitude: initialLocation.coordinate.longitude)
+        previousLocation = initialLocation
         
         // Set Previous State Matrix
-        // xk1 -> [ initial_lat  lat_velocity = 0.0  initial_lon  lon_velocity = 0.0 ]T
-        xk1.setMatrix(matrix: [[initialLocation.coordinate.latitude],[0.0],[initialLocation.coordinate.longitude],[0.0]])
+        // xk1 -> [ initial_lat  lat_velocity = 0.0  initial_lon  lon_velocity = 0.0 initial_altitude altitude_velocity = 0.0 ]T
+        xk1.setMatrix(matrix: [[initialLocation.coordinate.latitude],[0.0],[initialLocation.coordinate.longitude],[0.0],[initialLocation.altitude],[0.0]])
         
         // Set initial Covariance Matrix for Previous State
-        Pk1.setMatrix(matrix: [[0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0]])
+        Pk1.setMatrix(matrix: [[0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0]])
         
         // Prediction Step Matrix initialization
-        A.setMatrix(matrix: [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]])
+        A.setMatrix(matrix: [[1,0,0,0,0,0],[0,1,0,0,0,0],[0,0,1,0,0,0],[0,0,0,1,0,0],[0,0,0,0,1,0],[0,0,0,0,0,1]])
         
         // Sensor Noise Covariance Matrixinitialization
-        R.setMatrix(matrix: [[_rValue,0,0,0],[0,_rValue,0,0],[0,0,_rValue,0],[0,0,0,_rValue]])
+        R.setMatrix(matrix: [[_rValue,0,0,0,0,0],[0,_rValue,0,0,0,0],[0,0,_rValue,0,0,0],[0,0,0,_rValue,0,0],[0,0,0,0,_rValue,0],[0,0,0,0,0,_rValue]])
     }
     
     /// Restart Kalman Algorithm Function
@@ -165,7 +165,7 @@ open class HCKalmanAlgorithm
     /// - parameters:
     ///   - currentLocation: this is CLLocation object which represent current location returned by GPS. 
     ///                      **currentLocation** is real position of user, and it will be processed by Kalman Filter.
-    /// - returns: CLLocation object with corrected latitude and longitude values
+    /// - returns: CLLocation object with corrected latitude, longitude and altitude values
     
     open func processState(currentLocation: CLLocation) -> CLLocation
     {
@@ -180,37 +180,32 @@ open class HCKalmanAlgorithm
         let timeInterval = newMeasureTimeSeconds - lastMeasureTimeSeconds
         
         // Calculate and set Prediction Step Matrix based on new timeInterval value
-        A.setMatrix(matrix: [[1,Double(timeInterval),0,0],[0,1,0,0],[0,0,1,Double(timeInterval)],[0,0,0,1]])
+        A.setMatrix(matrix: [[1,Double(timeInterval),0,0,0,0],[0,1,0,0,0,0],[0,0,1,Double(timeInterval),0,0],[0,0,0,1,0,0],[0,0,0,0,1,Double(timeInterval)],[0,0,0,0,0,1]])
         
-        // Set Acceleration Noise Magnitude Matrix based on new timeInterval and sigma values
-        Qt.setMatrix(matrix: self.accelerationNoiseMagnitudeMatrix(timeInterval))
+        // Parts of Acceleration Noise Magnitude Matrix
+        let part1 = sigma*(Double(pow(Double(timeInterval), Double(4)))/4.0)
+        let part2 = sigma*(Double(pow(Double(timeInterval), Double(3)))/2.0)
+        let part3 = sigma*(Double(pow(Double(timeInterval), Double(2))))
         
-        // Calculate velocity components separated by the axes (x and y). 
+        // Calculate and set Acceleration Noise Magnitude Matrix based on new timeInterval and sigma values
+        Qt.setMatrix(matrix: [[part1,part2,0.0,0.0,0.0,0.0],[part2,part3,0.0,0.0,0.0,0.0],[0.0,0.0,part1,part2,0.0,0.0],[0.0,0.0,part2,part3,0.0,0.0],[0.0,0.0,0.0,0.0,part1,part2],[0.0,0.0,0.0,0.0,part2,part3]])
+        
+        // Calculate velocity components
         // This is value of velocity between previous and current location.
         // Distance traveled from the previous to the current location divided by timeInterval between two measurement.
         let velocityXComponent = (previousLocation.coordinate.latitude - currentLocation.coordinate.latitude)/timeInterval
         let velocityYComponent = (previousLocation.coordinate.longitude - currentLocation.coordinate.longitude)/timeInterval
+        let velocityZComponent = (previousLocation.altitude - currentLocation.altitude)/timeInterval
         
-        // Set Measured State Vector; current latitude and longitude and velocity separated by the latitude velocity and longitude velocity
-        zt.setMatrix(matrix: [[currentLocation.coordinate.latitude],[velocityXComponent],[currentLocation.coordinate.longitude],[velocityYComponent]])
+        // Set Measured State Vector; current latitude, longitude, altitude and latitude velocity, longitude velocity and altitude velocity
+        zt.setMatrix(matrix: [[currentLocation.coordinate.latitude],[velocityXComponent],[currentLocation.coordinate.longitude],[velocityYComponent],[currentLocation.altitude],[velocityZComponent]])
         
         // Set previous Location and Measure Time for next step of processState function.
-        previousLocation = CLLocation(latitude: currentLocation.coordinate.latitude, longitude: currentLocation.coordinate.longitude)
+        previousLocation = currentLocation
         previousMeasureTime = newMeasureTime
         
         // Return value of kalmanFilter
         return self.kalmanFilter()
-    }
-    
-    /// Calculate Acceleration Noise Magnitude Matrix based on new timeInterval and sigma values
-    private func accelerationNoiseMagnitudeMatrix(_ timeInterval:TimeInterval) -> [[Double]]
-    {
-        var matrix = [[Double]]()
-        matrix.append([sigma*(Double(pow(Double(timeInterval), Double(4)))/4.0),sigma*(Double(pow(Double(timeInterval), Double(3)))/2.0),0,0])
-        matrix.append([sigma*(Double(pow(Double(timeInterval), Double(3)))/2.0),sigma*(Double(pow(Double(timeInterval), Double(2)))),0,0])
-        matrix.append([0,0,sigma*(Double(pow(Double(timeInterval), Double(4)))/4.0),sigma*(Double(pow(Double(timeInterval), Double(3)))/2.0)])
-        matrix.append([0,0,sigma*(Double(pow(Double(timeInterval), Double(3)))/2.0),sigma*(Double(pow(Double(timeInterval), Double(2))))])
-        return matrix
     }
     
     /// Kalman Filter Function
@@ -224,7 +219,7 @@ open class HCKalmanAlgorithm
     ///
     /// Next step is Update part. It combines predicted state with sensor measurement. Update part first calculate Kalman gain (Kt).
     /// Kalman gain takes into consideration sensor noice. Next based on this value, value of predicted state and value of measurement,
-    /// algorithm can calculate new state, and function return corrected latitude and longitude values in CLLocation object.
+    /// algorithm can calculate new state, and function return corrected latitude, longitude and altitude values in CLLocation object.
     private func kalmanFilter() -> CLLocation
     {
         let xk = A*xk1
@@ -242,7 +237,10 @@ open class HCKalmanAlgorithm
         
         let lat = xk1.matrix[0][0]
         let lon = xk1.matrix[2][0]
+        let altitude = xk1.matrix[4][0]
         
-        return CLLocation(latitude: lat, longitude: lon)
+        let kalmanCLLocation = CLLocation(coordinate: CLLocationCoordinate2D(latitude: lat,longitude: lon), altitude: altitude, horizontalAccuracy: kCLLocationAccuracyBestForNavigation, verticalAccuracy: kCLLocationAccuracyBestForNavigation, timestamp: previousMeasureTime)
+        
+        return kalmanCLLocation
     }
 }
